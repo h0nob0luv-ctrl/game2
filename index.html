@@ -19,7 +19,6 @@
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
         }
 
-        /* ボーダーライン */
         #limit-line {
             position: absolute; top: 180px; left: 50px; width: 300px;
             border-top: 3px dashed #e57373; z-index: 5; display: none;
@@ -41,7 +40,6 @@
             font-size: 48px; font-weight: bold; color: #5d4037; z-index: 50; pointer-events: none; 
         }
 
-        /* 画面共通スタイル */
         #start-screen, #result-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(226, 217, 200, 0.98);
@@ -50,14 +48,18 @@
         }
         
         h1 { color: #5d4037; font-size: 42px; margin: 0 0 10px 0; }
-        .rule { color: #795548; font-size: 15px; margin-bottom: 30px; line-height: 1.6; }
+        .rule { color: #795548; font-size: 15px; margin-bottom: 20px; line-height: 1.6; }
+
+        .btn-group { display: flex; flex-direction: column; gap: 15px; }
 
         .btn-main {
-            padding: 15px 45px; font-size: 24px; font-weight: bold; color: #fff;
+            padding: 15px 45px; font-size: 20px; font-weight: bold; color: #fff;
             background: #a1887f; border: none; border-radius: 50px; cursor: pointer;
-            box-shadow: 0 5px #5d4037; outline: none; transition: 0.1s;
+            box-shadow: 0 5px #5d4037; outline: none; transition: 0.1s; min-width: 200px;
         }
         .btn-main:active { transform: translateY(2px); box-shadow: 0 2px #5d4037; }
+        .btn-goal { background: #81c784; box-shadow: 0 5px #388e3c; }
+        .btn-goal:active { box-shadow: 0 2px #388e3c; }
 
         #controls {
             position: absolute; bottom: 25px; width: 100%;
@@ -75,11 +77,17 @@
             position: absolute; top: 70px; font-size: 40px; z-index: 5;
             transition: left 0.1s ease-out;
         }
+
+        #mode-badge {
+            position: absolute; top: 10px; right: 10px; padding: 5px 10px;
+            background: #5d4037; color: white; border-radius: 5px; font-size: 12px; z-index: 50;
+        }
     </style>
 </head>
 <body>
 
 <div id="game-container">
+    <div id="mode-badge" style="display:none"></div>
     <div id="score-ui">0</div>
     <div id="guide-emoji">🍓</div>
     <div id="limit-line"></div>
@@ -89,12 +97,15 @@
     <div id="start-screen">
         <h1>くだもの<br>もりもり</h1>
         <p class="rule">🍓→🍇→🍎→🍍→🍉<br>カゴからはみ出さないように！</p>
-        <button class="btn-main" onclick="startGame()">START</button>
+        <div class="btn-group">
+            <button class="btn-main" onclick="startGame('endless')">ENDLESS</button>
+            <button class="btn-main btn-goal" onclick="startGame('goal')">GOAL (2500pts)</button>
+        </div>
     </div>
 
     <!-- リザルト画面 -->
     <div id="result-screen" style="display: none;">
-        <h1>GAME OVER</h1>
+        <h1 id="result-title">GAME OVER</h1>
         <p id="final-score" style="font-size: 24px; color: #5d4037; margin-bottom: 20px;"></p>
         <button class="btn-main" onclick="location.reload()">RETRY</button>
     </div>
@@ -121,26 +132,34 @@ const { Engine, Runner, Bodies, Composite, Events, Collision } = Matter;
 let engine, runner;
 const width = 400;
 const height = 700;
-const LIMIT_Y = 180; // ボーダーラインの高さ
+const LIMIT_Y = 180;
+const GOAL_SCORE = 2500; // ゴールモードの目標スコア
+
 let score = 0;
 let currentX = 200;
 let gameState = 'START';
+let gameMode = 'endless'; 
 let nextFruitIdx = 0;
 let gameOverTimer = 0;
 
 const fruitMap = new Map();
 let mergeQueue = [];
 
-function startGame() {
+function startGame(mode) {
+    gameMode = mode;
     document.getElementById('start-screen').style.display = 'none';
     document.getElementById('limit-line').style.display = 'block';
+    
+    const badge = document.getElementById('mode-badge');
+    badge.style.display = 'block';
+    badge.innerText = mode === 'goal' ? `GOAL: ${GOAL_SCORE}` : 'ENDLESS';
+
     gameState = 'PLAYING';
     pickNext();
 
     engine = Engine.create();
     runner = Runner.create();
 
-    // カゴの土台（左右の壁はないので、端に行くと落ちます）
     const floor = Bodies.rectangle(200, 575, 300, 30, {
         isStatic: true, friction: 0.8, label: 'floor'
     });
@@ -150,33 +169,34 @@ function startGame() {
     Events.on(engine, 'afterUpdate', () => {
         if (gameState !== 'PLAYING') return;
 
-        let isOverLimit = false;
+        // ゴール判定
+        if (gameMode === 'goal' && score >= GOAL_SCORE) {
+            endGame(true);
+            return;
+        }
 
+        let isOverLimit = false;
         fruitMap.forEach((el, body) => {
             const { x, y } = body.position;
             el.style.transform = `translate(${x}px, ${y}px) rotate(${body.angle}rad)`;
 
-            // 1. 画面外（カゴから落ちた）判定
             if (y > height || x < -50 || x > width + 50) {
                 removeFruit(body);
                 return;
             }
 
-            // 2. ボーダーライン判定（静止に近い状態でラインを超えているか）
             if (y < LIMIT_Y && body.velocity.y < 0.1) {
                 isOverLimit = true;
             }
         });
 
-        // ラインを超え続けて3秒（約180フレーム）でゲームオーバー
         if (isOverLimit) {
             gameOverTimer++;
-            if (gameOverTimer > 180) endGame();
+            if (gameOverTimer > 180) endGame(false);
         } else {
             gameOverTimer = 0;
         }
 
-        // マージ処理
         if (mergeQueue.length > 0) {
             mergeQueue.forEach(task => {
                 const targets = task.bodies;
@@ -214,10 +234,22 @@ function startGame() {
     Runner.run(runner, engine);
 }
 
-function endGame() {
+function endGame(isClear) {
     gameState = 'GAMEOVER';
-    document.getElementById('result-screen').style.display = 'flex';
+    const screen = document.getElementById('result-screen');
+    const title = document.getElementById('result-title');
+    
+    screen.style.display = 'flex';
     document.getElementById('final-score').innerText = "SCORE: " + score;
+    
+    if (isClear) {
+        title.innerText = "✨ CLEAR ✨";
+        title.style.color = "#4caf50";
+    } else {
+        title.innerText = "GAME OVER";
+        title.style.color = "#e57373";
+    }
+    
     Runner.stop(runner);
 }
 
